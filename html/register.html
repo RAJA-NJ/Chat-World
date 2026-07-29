@@ -10,43 +10,32 @@
 </head>
 
 <body>
-    <hero>
+    <header>
         <img src="chat-logo.png" alt="main-logo">
         <h1>Chat World</h1>
-    </hero>
+    </header>
     <main>
         <h2>Register</h2>
         <form>
-            <table>
-                <tr>
-                    <td>
-                        <p>
-                            Email:<input type="text" placeholder="mail123@chat.com">
-                        </p>
-                    </td>
-                </tr>
-                <tr>
-                    <td>
-                        <p>
-                            D.O.B:<input type="date">
-                        </p>
-                    </td>
-                </tr>
-                <tr>
-                    <td>
-                        <p>
-                            Gender:<select>
-                                <option>Select</option>
-                                <option>Male</option>
-                                <option>Female</option>
-                            </select>
-                        </p>
-                    </td>
-                </tr>
-                <tr>
-                    <td><input type="submit"></td>
-                </tr>
-            </table>
+
+            <label>Email</label>
+            <input type="email" placeholder="you@example.com" required>
+
+            <label>Date of Birth</label>
+            <input type="date" required>
+
+            <label>Gender</label>
+
+            <select>
+                <option>select</option>
+                <option>Male</option>
+                <option>Female</option>
+            </select>
+
+            <button>
+                Register
+            </button>
+            <a href="index.html">Already have an account?</a>
         </form>
     </main>
 </body>
