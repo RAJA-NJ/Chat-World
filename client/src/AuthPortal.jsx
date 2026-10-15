@@ -23,6 +23,7 @@ export default function AuthPortal() {
   const [busy, setBusy] = useState(false);
   const [adminStats, setAdminStats] = useState(null);
   const [adminUsers, setAdminUsers] = useState([]);
+  const [administrators, setAdministrators] = useState([]);
   const [auditEvents, setAuditEvents] = useState([]);
   const [adminSearch, setAdminSearch] = useState('');
   const change = event => setForm(old => ({ ...old, [event.target.name]: event.target.value }));
@@ -63,14 +64,16 @@ export default function AuthPortal() {
     if (user) setForm(old => ({ ...old, displayName: user.displayName || '', bio: user.bio || '', status: user.status || 'Available' }));
   }, [user]);
   async function loadAdmin(search = adminSearch) {
-    const [dashboard, pending, allUsers, audit] = await Promise.all([
+    const [dashboard, pending, allUsers, audit, admins] = await Promise.all([
       request('/api/auth/admin/dashboard', { token: accessToken }),
       request('/api/auth/admin/pending', { token: accessToken }),
       request('/api/auth/admin/users' + (search ? '?search=' + encodeURIComponent(search) : ''), { token: accessToken }),
       request('/api/auth/admin/audit', { token: accessToken }),
+      user?.role === 'super_admin' ? request('/api/auth/admin/administrators', { token: accessToken }) : Promise.resolve({ administrators: [] }),
     ]);
     setAdminStats(dashboard.stats);
     setAuditEvents(audit.events || dashboard.audit || []);
+    setAdministrators(admins.administrators || []);
     const pendingIds = new Set((pending.users || []).map(item => item._id));
     setAdminUsers([...(pending.users || []).map(item => ({ ...item, approvalStatus: 'pending' })), ...(allUsers.users || []).filter(item => !pendingIds.has(item._id))]);
     setMode('admin');
@@ -115,6 +118,7 @@ export default function AuthPortal() {
       <h2>Verified registration queue & user management</h2>
       <form className="cw-admin-search" onSubmit={e => { e.preventDefault(); loadAdmin(adminSearch).catch(err => setError(err.message)); }}><input value={adminSearch} onChange={e => setAdminSearch(e.target.value)} placeholder="Search exact username, display name, or email"/><button type="submit">Search</button></form>
       <div className="cw-admin-users">{adminUsers.map(item=><article className="cw-admin-user" key={item._id}><div><strong>{item.displayName || item.username}</strong><small>@{item.username} · {item.email}</small><small>{item.approvalStatus} · {item.suspendedAt ? 'Suspended' : 'Active'}</small></div><div className="cw-admin-actions">{item.approvalStatus === 'pending' && <><button disabled={busy} onClick={() => adminAction(item._id,'approval',{status:'approved'})}>Approve</button><button className="secondary" disabled={busy} onClick={() => adminAction(item._id,'approval',{status:'rejected'})}>Reject</button></>}{item.approvalStatus === 'approved' && <button className="secondary" disabled={busy} onClick={() => adminAction(item._id,'suspension',{suspended:!item.suspendedAt,reason:'Administrative moderation'})}>{item.suspendedAt ? 'Reactivate' : 'Suspend'}</button>}{user?.role === 'super_admin' && <><button className="secondary" disabled={busy} onClick={() => adminAction(item._id,'role',{role:'moderator'})}>Make Moderator</button><button className="secondary" disabled={busy} onClick={() => adminAction(item._id,'role',{role:'user'})}>Remove Admin Role</button></>}</div></article>)}{adminUsers.length === 0 && <p>No matching accounts found.</p>}</div>
+      {user?.role === 'super_admin' && <><h2>Administrator roles</h2><div className="cw-admin-users">{administrators.map(admin=><article className="cw-admin-user" key={admin._id}><div><strong>{admin.displayName || admin.username}</strong><small>@{admin.username} · {admin.email}</small><small>{admin.role === 'super_admin' ? 'Super Admin' : 'Moderator'}</small></div><div className="cw-admin-actions">{admin._id !== user?.id && <>{admin.role === 'moderator' && <button disabled={busy} onClick={() => adminAction(admin._id,'role',{role:'super_admin'})}>Make Super Admin</button>}{admin.role === 'super_admin' && <button className="secondary" disabled={busy} onClick={() => adminAction(admin._id,'role',{role:'moderator'})}>Make Moderator</button>}<button className="secondary" disabled={busy} onClick={() => adminAction(admin._id,'role',{role:'user'})}>Remove Admin Role</button></>}</div></article>)}{administrators.length === 0 && <p>No additional administrators.</p>}</div></>}
       <h2>Recent audit history</h2><div className="cw-audit-list">{auditEvents.map((event,index)=><div key={event._id || index}><strong>{event.action}</strong><small>{event.actorId?.username || 'Administrator'} · {new Date(event.createdAt).toLocaleString()}</small></div>)}{auditEvents.length === 0 && <p>No audit events yet.</p>}</div>
     </section>}
     {mode === 'guest' && <div className="cw-form"><p>Guest public-chat entry remains available through the existing lobby screen.</p><button onClick={() => { window.location.href = '/?guest=1'; }}>Continue to guest chat</button></div>}
