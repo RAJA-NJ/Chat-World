@@ -12,6 +12,17 @@ npm install
 npm run dev
 ```
 
+In a second terminal, start the chat server:
+
+```bash
+cd server
+npm install
+npm run dev
+```
+
+The client runs on `http://localhost:5173` and the Socket.IO server runs on `http://localhost:3001`. Keep both terminals running. This first stage uses an in-memory public lobby: chat history is temporary and clears when the server restarts. It is not yet connected to MongoDB or account authentication.
+```
+
 Open the local URL printed by Vite (usually http://localhost:5173).
 
 ## Available screens
