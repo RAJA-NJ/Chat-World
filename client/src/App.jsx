@@ -69,11 +69,81 @@ function ChatApp({ username, onHome }) {
   return <main className="chat-app"><aside className="sidebar"><div className="sidebar-top"><button className="brand-button" onClick={onHome}><Brand/></button><button className="icon-button" title="Back to home" onClick={onHome}>↗</button></div><div className="workspace-label">YOUR WORKSPACE</div><div className="workspace-card"><span className="workspace-icon">✳</span><div><strong>My ChatWorld</strong><small>Free space</small></div><span className="muted">⌄</span></div><div className="inbox-heading"><span>MESSAGES</span><button className="icon-button" title="New conversation" onClick={()=>setShowNew(!showNew)}>＋</button></div>{showNew && <div className="new-chat-note">Choose a conversation from the list, or switch between direct and group chats below.</div>}<div className="search-box"><span>⌕</span><input aria-label="Search chats" placeholder="Search chats..." value={search} onChange={e=>setSearch(e.target.value)}/><kbd>⌘ K</kbd></div><div className="filter-tabs">{['All chats','Direct','Groups'].map(k=><button key={k} className={kind===k?'active':''} onClick={()=>setKind(k)}>{k}</button>)}</div><div className="conversation-list">{filtered.map(p=><button key={p.name} className={`conversation ${selected===p.name?'selected':''}`} onClick={()=>{setSelected(p.name);setNotice('')}}><Avatar person={p}/><span className="conversation-copy"><strong>{p.name}</strong><small>{p.preview}</small></span><span className="conversation-meta"><small>{p.time}</small>{p.status==='Online now'&&<i/>}</span></button>)}{filtered.length===0&&<p className="empty-search">No conversations found.</p>}</div><div className="sidebar-profile"><Avatar person={{initials:username.slice(0,2).toUpperCase(),color:'mint'}}/><div><strong>{username}</strong><small>Guest preview</small></div><span className="online-status" title="Online"/></div></aside><section className="conversation-panel"><header className="chat-header"><div className="chat-heading"><Avatar person={{initials:selected.split(' ').map(s=>s[0]).join('').slice(0,2),color:people.find(p=>p.name===selected)?.color||'blue'}}/><div><h2>{selected}</h2><p><span className="live-dot"/> {people.find(p=>p.name===selected)?.status || 'Demo conversation'}</p></div></div><div className="header-actions"><button className="icon-button" title="Search messages" onClick={()=>setNotice('Message search is a placeholder in this frontend demo.')}>⌕</button><button className="icon-button" title="Conversation details" onClick={()=>setNotice(`You're viewing the ${selected} demo conversation.`)}>ⓘ</button></div></header>{notice&&<div className="notice-bar">{notice}<button onClick={()=>setNotice('')}>×</button></div>}<div className="chat-topic"><span>✦</span> A good place for good conversations <span>·</span> <strong>{selected==='Design crew'?'Group chat':'Direct message'}</strong></div><div className="message-area"><div className="day-divider"><span/> TODAY <span/></div>{messages.map(m=><div key={m.id} className={`message-row ${m.own?'message-own':''}`}>{!m.own&&<Avatar person={m} small/>}<div className="message-content">{!m.own&&<div className="message-byline"><strong>{m.name}</strong><span>{m.time}</span></div>}<div className="message-bubble">{m.text}</div>{m.own&&<small className="message-time">{m.time} · Sent</small>}</div></div>)}<div className="typing-note"><span className="typing-dots"><i/><i/><i/></span> Your conversation is just getting started.</div></div><form className="composer" onSubmit={sendMessage}><div className="composer-tools"><button type="button" title="Formatting" onClick={()=>setNotice('Rich text formatting will be added in a later step.')}>Aa</button><button type="button" title="Attach file" onClick={()=>setNotice('File sharing will be added after the backend is connected.')}>＋</button><span>Messages are local to this preview</span></div><div className="composer-entry"><input value={draft} onChange={e=>setDraft(e.target.value)} placeholder={`Message ${selected}...`} aria-label="Write a message"/><button className="send-button" type="submit" disabled={!draft.trim()} aria-label="Send message">↑</button></div></form><div className="demo-warning">Demo mode · Messages reset when you refresh. No backend is connected yet.</div></section></main>;
 }
 
+function LivePublicRoom({ nickname, onLeave }) {
+  const [socket, setSocket] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [draft, setDraft] = useState('');
+  const [connection, setConnection] = useState('Connecting…');
+  const endRef = React.useRef(null);
+
+  useEffect(() => {
+    const serverUrl = import.meta.env.VITE_CHAT_SERVER_URL || 'http://localhost:3001';
+    const liveSocket = io(serverUrl, { transports: ['websocket', 'polling'] });
+    setSocket(liveSocket);
+    liveSocket.on('connect', () => setConnection('Connected'));
+    liveSocket.on('disconnect', () => setConnection('Reconnecting…'));
+    liveSocket.on('chat:history', (history) => setMessages(history));
+    liveSocket.on('users:update', (onlineUsers) => setUsers(onlineUsers));
+    liveSocket.on('chat:message', (message) => setMessages((previous) => [...previous, message].slice(-200)));
+    liveSocket.on('chat:error', (message) => setConnection(message || 'Unable to send message'));
+    liveSocket.emit('room:join', { nickname });
+    return () => liveSocket.disconnect();
+  }, [nickname]);
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  function sendMessage(event) {
+    event.preventDefault();
+    const text = draft.trim();
+    if (!text || !socket?.connected) return;
+    socket.emit('chat:send', { text });
+    setDraft('');
+  }
+
+  return <main className="chat-app">
+    <aside className="sidebar">
+      <div className="sidebar-top"><div className="brand"><span className="brand-mark">✳</span><span>chat<span className="brand-light">world</span></span></div><button className="icon-button" onClick={onLeave} title="Leave chat">↗</button></div>
+      <div className="workspace-label">PUBLIC COMMUNITY</div>
+      <div className="workspace-card"><span className="workspace-icon">✳</span><div><strong>ChatWorld Lobby</strong><small>Public chat room</small></div></div>
+      <div className="inbox-heading"><span>ONLINE NOW · {users.length}</span></div>
+      <div className="conversation-list">{users.map((user) => <div className="conversation" key={user.id}><span className="avatar mint">{user.nickname.slice(0,2).toUpperCase()}</span><span className="conversation-copy"><strong>{user.nickname}{user.id === socket?.id ? ' (you)' : ''}</strong><small>Online in lobby</small></span><span className="online-status" /></div>)}</div>
+      <div className="sidebar-profile"><span className="avatar mint">{nickname.slice(0,2).toUpperCase()}</span><div><strong>{nickname}</strong><small>Guest account</small></div><span className="online-status" /></div>
+    </aside>
+    <section className="conversation-panel">
+      <header className="chat-header"><div className="chat-heading"><span className="avatar blue">#</span><div><h2>Public Lobby</h2><p><span className="live-dot" /> {connection} · {users.length} online</p></div></div><button className="button button-outline" onClick={onLeave}>Change nickname</button></header>
+      <div className="chat-topic"><span>✦</span> Welcome to ChatWorld — be kind, respect everyone, and enjoy the conversation.</div>
+      <div className="message-area">{messages.length === 0 && <div className="empty-search">Welcome, {nickname}! Say hello to the room to start the conversation.</div>}
+        {messages.map((message) => <div className={`message-row ${message.socketId === socket?.id ? 'message-own' : ''}`} key={message.id}>
+          {message.socketId !== socket?.id && <span className="avatar avatar-small blue">{message.nickname.slice(0,2).toUpperCase()}</span>}
+          <div className="message-content"><div className="message-byline"><strong>{message.nickname}{message.socketId === socket?.id ? ' (you)' : ''}</strong><span>{new Date(message.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span></div><div className="message-bubble">{message.text}</div></div>
+        </div>)}<div ref={endRef} /></div>
+      <form className="composer" onSubmit={sendMessage}><div className="composer-tools"><span>Posting as <strong>{nickname}</strong></span><span>Keep it friendly · Never share passwords</span></div><div className="composer-entry"><input value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={500} placeholder={connection === 'Connected' ? 'Write a message to everyone…' : 'Connecting to ChatWorld…'} aria-label="Write a public message" disabled={connection !== 'Connected'} /><button className="send-button" type="submit" disabled={!draft.trim() || connection !== 'Connected'} aria-label="Send message">↑</button></div></form>
+      <div className="demo-warning">Guest chat · Public messages are visible to everyone in this room.</div>
+    </section>
+  </main>;
+}
+
 export default function App() {
-  const [page, setPage] = useState('home');
-  const [username, setUsername] = useState('Guest');
-  function enterChat(name) { setUsername(name || 'Guest'); setPage('chat'); }
-  if (page === 'chat') return <ChatApp username={username} onHome={()=>setPage('home')}/>;
-  if (page === 'login' || page === 'register') return <AuthPage mode={page} onBack={()=>setPage('home')} onSwitch={()=>setPage(page==='login'?'register':'login')} onSuccess={enterChat}/>;
-  return <Landing onLogin={()=>setPage('login')} onRegister={()=>setPage('register')} onGuest={()=>enterChat('Guest')}/>;
+  const [nickname, setNickname] = useState('');
+  const [draftName, setDraftName] = useState('');
+  const [error, setError] = useState('');
+
+  function enterRoom(event) {
+    event.preventDefault();
+    const clean = draftName.trim().replace(/\\s+/g, ' ');
+    if (clean.length < 2 || clean.length > 24) {
+      setError('Choose a nickname between 2 and 24 characters.');
+      return;
+    }
+    if (!/^[\\p{L}\\p{N}_ -]+$/u.test(clean)) {
+      setError('Use letters, numbers, spaces, underscores, or hyphens only.');
+      return;
+    }
+    setNickname(clean);
+    setError('');
+  }
+
+  if (nickname) return <LivePublicRoom nickname={nickname} onLeave={() => { setNickname(''); setDraftName(''); }} />;
+  return <main className="auth-shell"><div className="auth-card"><div className="brand"><span className="brand-mark">✳</span><span>chat<span className="brand-light">world</span></span></div><div className="auth-heading"><div className="eyebrow">YOUR PEOPLE. YOUR SPACE.</div><h1>Join the conversation.</h1><p>Choose a nickname and enter the public ChatWorld lobby.</p></div><form className="auth-form" onSubmit={enterRoom}><label>Your nickname<input value={draftName} onChange={(event) => setDraftName(event.target.value)} placeholder="e.g. Raja" autoComplete="nickname" maxLength={24} required autoFocus /></label>{error && <p className="form-error" role="alert">{error}</p>}<button className="button button-primary button-full" type="submit">Enter public chat <span>→</span></button></form><p className="demo-note">Guest mode · No account needed. Messages in the public room can be seen by everyone.</p></div></main>;
 }
