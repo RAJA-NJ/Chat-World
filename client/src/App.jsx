@@ -132,13 +132,13 @@ export default function App() {
 
   function enterRoom(event) {
     event.preventDefault();
-    const clean = draftName.trim().replace(/\\s+/g, ' ');
+    const clean = draftName.trim().split(' ').filter(Boolean).join(' ');
     if (clean.length < 2 || clean.length > 24) {
       setError('Choose a nickname between 2 and 24 characters.');
       return;
     }
-    if (!/^[\\p{L}\\p{N}_ -]+$/u.test(clean)) {
-      setError('Use letters, numbers, spaces, underscores, or hyphens only.');
+    if (!/^[A-Za-z0-9_ -]+$/.test(clean)) {
+      setError('Use English letters, numbers, spaces, underscores, or hyphens only.');
       return;
     }
     setNickname(clean);
