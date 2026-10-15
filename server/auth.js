@@ -24,7 +24,9 @@ const userSchema = new mongoose.Schema({
   passwordHash: { type: String, required: true, select: false },
   emailVerifiedAt: { type: Date, default: null },
   approvalStatus: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
-  role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  role: { type: String, enum: ['user', 'super_admin', 'moderator'], default: 'user' },
+  suspendedAt: { type: Date, default: null },
+  suspensionReason: { type: String, default: '', maxlength: 240 },
   bio: { type: String, default: '', maxlength: 160 },
   status: { type: String, default: 'Available', maxlength: 60 },
   avatarPath: { type: String, default: '' },
@@ -36,6 +38,17 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const User = mongoose.models.ChatWorldUser || mongoose.model('ChatWorldUser', userSchema);
+const auditSchema = new mongoose.Schema({
+  actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'ChatWorldUser', required: true },
+  actorRole: { type: String, required: true }, action: { type: String, required: true },
+  targetId: { type: mongoose.Schema.Types.ObjectId, default: null },
+  details: { type: mongoose.Schema.Types.Mixed, default: {} }, ip: { type: String, maxlength: 80 },
+}, { timestamps: true });
+auditSchema.index({ createdAt: -1 });
+const AuditEvent = mongoose.models.ChatWorldAuditEvent || mongoose.model('ChatWorldAuditEvent', auditSchema);
+async function audit(req, action, targetId = null, details = {}) {
+  await AuditEvent.create({ actorId: req.user.id, actorRole: req.user.role, action, targetId, details, ip: String(req.ip || '').slice(0, 80) });
+}
 const tokenHash = value => crypto.createHash('sha256').update(value).digest('hex');
 const randomToken = () => crypto.randomBytes(32).toString('hex');
 const transporter = process.env.SMTP_HOST ? nodemailer.createTransport({
@@ -75,12 +88,17 @@ async function currentUser(req, res, next) {
     const payload = jwt.verify(token, ACCESS_SECRET, { issuer: 'chatworld' });
     const user = await User.findById(payload.sub);
     if (!user || user.approvalStatus !== 'approved' || !user.emailVerifiedAt) return res.status(403).json({ message: 'Account is not approved and verified.' });
+    if (user.suspendedAt) return res.status(403).json({ message: 'This account is suspended. Contact ChatWorld support.' });
     req.user = user;
     next();
   } catch { res.status(401).json({ message: 'Please sign in again.' }); }
 }
 function requireAdmin(req, res, next) {
-  if (req.user?.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' });
+  if (!['super_admin', 'moderator'].includes(req.user?.role)) return res.status(403).json({ message: 'Administrator access required.' });
+  next();
+}
+function requireSuperAdmin(req, res, next) {
+  if (req.user?.role !== 'super_admin') return res.status(403).json({ message: 'Super Admin access required.' });
   next();
 }
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 1 } });
@@ -134,6 +152,7 @@ router.post('/login', async (req, res, next) => {
     const password = String(req.body.password || '');
     const user = await User.findOne({ $or: [{ email: identity }, { username: identity }] }).select('+passwordHash +refreshTokenHash');
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) return res.status(401).json({ message: 'Invalid credentials.' });
+    if (user.suspendedAt) return res.status(403).json({ message: 'This account is suspended. Contact ChatWorld support.' });
     if (!user.emailVerifiedAt) return res.status(403).json({ message: 'Please verify your email before signing in.' });
     if (user.approvalStatus !== 'approved') return res.status(403).json({ message: 'Your account is awaiting admin approval.' });
     const refresh = randomToken();
@@ -150,7 +169,7 @@ router.post('/refresh', async (req, res, next) => {
     const refresh = req.cookies?.cw_refresh;
     if (!refresh) return res.status(401).json({ message: 'Refresh session missing.' });
     const user = await User.findOne({ refreshTokenHash: tokenHash(refresh) }).select('+refreshTokenHash');
-    if (!user || !user.emailVerifiedAt || user.approvalStatus !== 'approved') return res.status(401).json({ message: 'Refresh session expired.' });
+    if (!user || !user.emailVerifiedAt || user.approvalStatus !== 'approved' || user.suspendedAt) return res.status(401).json({ message: 'Refresh session expired.' });
     const nextRefresh = randomToken();
     user.refreshTokenHash = tokenHash(nextRefresh);
     await user.save();
@@ -218,7 +237,30 @@ router.post('/profile/avatar', currentUser, upload.single('avatar'), async (req,
   } catch (error) { next(error); }
 });
 
+router.get('/admin/dashboard', currentUser, requireAdmin, async (_req, res, next) => {
+  try {
+    const [totalUsers, pending, verified, onlineApprox, suspended, recentAudit] = await Promise.all([
+      User.countDocuments({ role: 'user' }), User.countDocuments({ approvalStatus: 'pending', emailVerifiedAt: { $ne: null }, role: 'user' }),
+      User.countDocuments({ emailVerifiedAt: { $ne: null }, role: 'user' }), Promise.resolve(null),
+      User.countDocuments({ suspendedAt: { $ne: null }, role: 'user' }),
+      AuditEvent.find().sort({ createdAt: -1 }).limit(20).populate('actorId', 'username displayName').lean(),
+    ]);
+    res.json({ stats: { totalUsers, pendingApprovals: pending, verifiedUsers: verified, onlineUsers: onlineApprox, suspendedUsers: suspended }, audit: recentAudit });
+  } catch (error) { next(error); }
+});
 router.get('/admin/pending', currentUser, requireAdmin, async (_req, res, next) => {
+  try {
+    const users = await User.find({ approvalStatus: 'pending', emailVerifiedAt: { $ne: null }, role: 'user' })
+      .select('username displayName email emailVerifiedAt createdAt').sort({ createdAt: 1 }).lean();
+    res.json({ users });
+  } catch (error) { next(error); }
+});
+router.get('/admin/users', currentUser, requireAdmin, async (req, res, next) => {
+  try {
+    const search = String(req.query.search || '').trim().slice(0, 80);
+    const filter = { role: 'user' };
+    if (search) filter.$or = [
+      { username: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\router.get('/admin/pending', currentUser, requireAdmin, async (_req, res, next) => {
   try {
     const users = await User.find({ approvalStatus: 'pending' }).select('username displayName email emailVerifiedAt createdAt');
     res.json({ users });
@@ -235,6 +277,101 @@ router.post('/admin/users/:id/approval', currentUser, requireAdmin, async (req, 
     await user.save();
     res.json({ message: `Account ${status}.` });
   } catch (error) { next(error); }
+});'), $options: 'i' } },
+      { displayName: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\router.get('/admin/pending', currentUser, requireAdmin, async (_req, res, next) => {
+  try {
+    const users = await User.find({ approvalStatus: 'pending' }).select('username displayName email emailVerifiedAt createdAt');
+    res.json({ users });
+  } catch (error) { next(error); }
+});
+router.post('/admin/users/:id/approval', currentUser, requireAdmin, async (req, res, next) => {
+  try {
+    const status = req.body.status;
+    if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ message: 'Status must be approved or rejected.' });
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'User not found.' });
+    if (!user.emailVerifiedAt) return res.status(409).json({ message: 'User must verify their email before admin approval.' });
+    user.approvalStatus = status;
+    await user.save();
+    res.json({ message: `Account ${status}.` });
+  } catch (error) { next(error); }
+});'), $options: 'i' } },
+      { email: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\router.get('/admin/pending', currentUser, requireAdmin, async (_req, res, next) => {
+  try {
+    const users = await User.find({ approvalStatus: 'pending' }).select('username displayName email emailVerifiedAt createdAt');
+    res.json({ users });
+  } catch (error) { next(error); }
+});
+router.post('/admin/users/:id/approval', currentUser, requireAdmin, async (req, res, next) => {
+  try {
+    const status = req.body.status;
+    if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ message: 'Status must be approved or rejected.' });
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'User not found.' });
+    if (!user.emailVerifiedAt) return res.status(409).json({ message: 'User must verify their email before admin approval.' });
+    user.approvalStatus = status;
+    await user.save();
+    res.json({ message: `Account ${status}.` });
+  } catch (error) { next(error); }
+});'), $options: 'i' } },
+    ];
+    const users = await User.find(filter).select('username displayName email emailVerifiedAt approvalStatus suspendedAt createdAt').sort({ createdAt: -1 }).limit(100).lean();
+    res.json({ users });
+  } catch (error) { next(error); }
+});
+router.post('/admin/users/:id/approval', currentUser, requireAdmin, async (req, res, next) => {
+  try {
+    const status = req.body.status;
+    if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ message: 'Status must be approved or rejected.' });
+    const user = await User.findById(req.params.id);
+    if (!user || user.role !== 'user') return res.status(404).json({ message: 'User not found.' });
+    if (!user.emailVerifiedAt) return res.status(409).json({ message: 'User must verify their email before admin approval.' });
+    user.approvalStatus = status;
+    if (status === 'rejected') user.refreshTokenHash = undefined;
+    await user.save();
+    await audit(req, `account_${status}`, user._id, { targetUsername: user.username });
+    if (status === 'rejected' && transporter && process.env.MAIL_FROM) {
+      try { await transporter.sendMail({ from: process.env.MAIL_FROM, to: user.email, subject: 'ChatWorld registration update', text: 'Thank you for your interest in ChatWorld. We are unable to approve your registration at this time.' }); } catch { /* Generic response remains; log email delivery separately in deployment monitoring. */ }
+    }
+    res.json({ message: status === 'rejected' ? 'Account rejected. A generic notification will be sent when email delivery is configured.' : 'Account approved.' });
+  } catch (error) { next(error); }
+});
+router.post('/admin/users/:id/suspension', currentUser, requireAdmin, async (req, res, next) => {
+  try {
+    const suspend = req.body.suspended;
+    if (typeof suspend !== 'boolean') return res.status(400).json({ message: 'suspended must be true or false.' });
+    const user = await User.findById(req.params.id).select('+refreshTokenHash');
+    if (!user || user.role !== 'user') return res.status(404).json({ message: 'User not found.' });
+    user.suspendedAt = suspend ? new Date() : null;
+    user.suspensionReason = suspend ? String(req.body.reason || '').trim().slice(0, 240) : '';
+    if (suspend) user.refreshTokenHash = undefined;
+    await user.save();
+    await audit(req, suspend ? 'account_suspended' : 'account_reactivated', user._id, { targetUsername: user.username, reasonRecorded: Boolean(user.suspensionReason) });
+    res.json({ message: suspend ? 'Account suspended.' : 'Account reactivated.' });
+  } catch (error) { next(error); }
+});
+router.get('/admin/audit', currentUser, requireAdmin, async (_req, res, next) => {
+  try {
+    const events = await AuditEvent.find().sort({ createdAt: -1 }).limit(100).populate('actorId', 'username displayName').lean();
+    res.json({ events });
+  } catch (error) { next(error); }
+});
+router.post('/admin/users/:id/role', currentUser, requireSuperAdmin, async (req, res, next) => {
+  try {
+    const role = req.body.role;
+    if (!['user', 'moderator', 'super_admin'].includes(role)) return res.status(400).json({ message: 'Invalid role.' });
+    const target = await User.findById(req.params.id);
+    if (!target) return res.status(404).json({ message: 'User not found.' });
+    if (target.id === req.user.id && role !== 'super_admin') return res.status(409).json({ message: 'You cannot demote your own Super Admin account.' });
+    if (target.role === 'super_admin' && role !== 'super_admin') {
+      const count = await User.countDocuments({ role: 'super_admin' });
+      if (count <= 1) return res.status(409).json({ message: 'The last Super Admin cannot be demoted.' });
+    }
+    target.role = role;
+    await target.save();
+    await audit(req, 'administrator_role_changed', target._id, { newRole: role });
+    res.json({ message: 'Administrator role updated.' });
+  } catch (error) { next(error); }
 });
 
 export async function createInitialAdmin() {
@@ -243,13 +380,13 @@ export async function createInitialAdmin() {
   const password = process.env.INITIAL_ADMIN_PASSWORD;
   if (!email || !username || !password) return;
   if (password.length < 16) throw new Error('INITIAL_ADMIN_PASSWORD must be at least 16 characters.');
-  const existing = await User.findOne({ role: 'admin' });
+  const existing = await User.findOne({ role: 'super_admin' });
   if (existing) return;
   const raw = await User.findOne({ $or: [{ email }, { username }] });
   if (raw) throw new Error('Initial admin email/username already belongs to a non-admin account; resolve it manually.');
   await User.create({
     username, displayName: process.env.INITIAL_ADMIN_DISPLAY_NAME || 'ChatWorld Admin', email,
-    passwordHash: await bcrypt.hash(password, 12), emailVerifiedAt: new Date(), approvalStatus: 'approved', role: 'admin',
+    passwordHash: await bcrypt.hash(password, 12), emailVerifiedAt: new Date(), approvalStatus: 'approved', role: 'super_admin',
   });
   console.log('Initial ChatWorld admin created from environment configuration.');
 }
