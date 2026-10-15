@@ -239,18 +239,19 @@ router.post('/profile/avatar', currentUser, upload.single('avatar'), async (req,
 
 router.get('/admin/dashboard', currentUser, requireAdmin, async (_req, res, next) => {
   try {
-    const [totalUsers, pending, verified, onlineApprox, suspended, recentAudit] = await Promise.all([
-      User.countDocuments({ role: 'user' }), User.countDocuments({ approvalStatus: 'pending', emailVerifiedAt: { $ne: null }, role: 'user' }),
-      User.countDocuments({ emailVerifiedAt: { $ne: null }, role: 'user' }), Promise.resolve(null),
-      User.countDocuments({ suspendedAt: { $ne: null }, role: 'user' }),
+    const [totalUsers, pendingApprovals, verifiedUsers, suspendedUsers, audit] = await Promise.all([
+      User.countDocuments({ role: 'user' }),
+      User.countDocuments({ role: 'user', approvalStatus: 'pending', emailVerifiedAt: { $ne: null } }),
+      User.countDocuments({ role: 'user', emailVerifiedAt: { $ne: null } }),
+      User.countDocuments({ role: 'user', suspendedAt: { $ne: null } }),
       AuditEvent.find().sort({ createdAt: -1 }).limit(20).populate('actorId', 'username displayName').lean(),
     ]);
-    res.json({ stats: { totalUsers, pendingApprovals: pending, verifiedUsers: verified, onlineUsers: onlineApprox, suspendedUsers: suspended }, audit: recentAudit });
+    res.json({ stats: { totalUsers, pendingApprovals, verifiedUsers, suspendedUsers }, audit });
   } catch (error) { next(error); }
 });
 router.get('/admin/pending', currentUser, requireAdmin, async (_req, res, next) => {
   try {
-    const users = await User.find({ approvalStatus: 'pending', emailVerifiedAt: { $ne: null }, role: 'user' })
+    const users = await User.find({ role: 'user', approvalStatus: 'pending', emailVerifiedAt: { $ne: null } })
       .select('username displayName email emailVerifiedAt createdAt').sort({ createdAt: 1 }).lean();
     res.json({ users });
   } catch (error) { next(error); }
@@ -260,62 +261,10 @@ router.get('/admin/users', currentUser, requireAdmin, async (req, res, next) => 
     const search = String(req.query.search || '').trim().slice(0, 80);
     const filter = { role: 'user' };
     if (search) filter.$or = [
-      { username: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\router.get('/admin/pending', currentUser, requireAdmin, async (_req, res, next) => {
-  try {
-    const users = await User.find({ approvalStatus: 'pending' }).select('username displayName email emailVerifiedAt createdAt');
-    res.json({ users });
-  } catch (error) { next(error); }
-});
-router.post('/admin/users/:id/approval', currentUser, requireAdmin, async (req, res, next) => {
-  try {
-    const status = req.body.status;
-    if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ message: 'Status must be approved or rejected.' });
-    const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).json({ message: 'User not found.' });
-    if (!user.emailVerifiedAt) return res.status(409).json({ message: 'User must verify their email before admin approval.' });
-    user.approvalStatus = status;
-    await user.save();
-    res.json({ message: `Account ${status}.` });
-  } catch (error) { next(error); }
-});'), $options: 'i' } },
-      { displayName: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\router.get('/admin/pending', currentUser, requireAdmin, async (_req, res, next) => {
-  try {
-    const users = await User.find({ approvalStatus: 'pending' }).select('username displayName email emailVerifiedAt createdAt');
-    res.json({ users });
-  } catch (error) { next(error); }
-});
-router.post('/admin/users/:id/approval', currentUser, requireAdmin, async (req, res, next) => {
-  try {
-    const status = req.body.status;
-    if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ message: 'Status must be approved or rejected.' });
-    const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).json({ message: 'User not found.' });
-    if (!user.emailVerifiedAt) return res.status(409).json({ message: 'User must verify their email before admin approval.' });
-    user.approvalStatus = status;
-    await user.save();
-    res.json({ message: `Account ${status}.` });
-  } catch (error) { next(error); }
-});'), $options: 'i' } },
-      { email: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\router.get('/admin/pending', currentUser, requireAdmin, async (_req, res, next) => {
-  try {
-    const users = await User.find({ approvalStatus: 'pending' }).select('username displayName email emailVerifiedAt createdAt');
-    res.json({ users });
-  } catch (error) { next(error); }
-});
-router.post('/admin/users/:id/approval', currentUser, requireAdmin, async (req, res, next) => {
-  try {
-    const status = req.body.status;
-    if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ message: 'Status must be approved or rejected.' });
-    const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).json({ message: 'User not found.' });
-    if (!user.emailVerifiedAt) return res.status(409).json({ message: 'User must verify their email before admin approval.' });
-    user.approvalStatus = status;
-    await user.save();
-    res.json({ message: `Account ${status}.` });
-  } catch (error) { next(error); }
-});'), $options: 'i' } },
+      { username: search }, { displayName: search }, { email: search },
     ];
-    const users = await User.find(filter).select('username displayName email emailVerifiedAt approvalStatus suspendedAt createdAt').sort({ createdAt: -1 }).limit(100).lean();
+    const users = await User.find(filter).select('username displayName email emailVerifiedAt approvalStatus suspendedAt createdAt')
+      .sort({ createdAt: -1 }).limit(100).lean();
     res.json({ users });
   } catch (error) { next(error); }
 });
@@ -329,25 +278,28 @@ router.post('/admin/users/:id/approval', currentUser, requireAdmin, async (req, 
     user.approvalStatus = status;
     if (status === 'rejected') user.refreshTokenHash = undefined;
     await user.save();
-    await audit(req, `account_${status}`, user._id, { targetUsername: user.username });
+    await audit(req, 'account_' + status, user._id, { targetUsername: user.username });
     if (status === 'rejected' && transporter && process.env.MAIL_FROM) {
-      try { await transporter.sendMail({ from: process.env.MAIL_FROM, to: user.email, subject: 'ChatWorld registration update', text: 'Thank you for your interest in ChatWorld. We are unable to approve your registration at this time.' }); } catch { /* Generic response remains; log email delivery separately in deployment monitoring. */ }
+      try {
+        await transporter.sendMail({ from: process.env.MAIL_FROM, to: user.email, subject: 'ChatWorld registration update', text: 'Thank you for your interest in ChatWorld. We are unable to approve your registration at this time.' });
+      } catch { /* Keep the user-facing rejection generic; monitor mail delivery operationally. */ }
     }
-    res.json({ message: status === 'rejected' ? 'Account rejected. A generic notification will be sent when email delivery is configured.' : 'Account approved.' });
+    res.json({ message: status === 'rejected' ? 'Account rejected. A generic notification was requested.' : 'Account approved.' });
   } catch (error) { next(error); }
 });
 router.post('/admin/users/:id/suspension', currentUser, requireAdmin, async (req, res, next) => {
   try {
-    const suspend = req.body.suspended;
-    if (typeof suspend !== 'boolean') return res.status(400).json({ message: 'suspended must be true or false.' });
+    if (typeof req.body.suspended !== 'boolean') return res.status(400).json({ message: 'suspended must be true or false.' });
     const user = await User.findById(req.params.id).select('+refreshTokenHash');
     if (!user || user.role !== 'user') return res.status(404).json({ message: 'User not found.' });
-    user.suspendedAt = suspend ? new Date() : null;
-    user.suspensionReason = suspend ? String(req.body.reason || '').trim().slice(0, 240) : '';
-    if (suspend) user.refreshTokenHash = undefined;
+    user.suspendedAt = req.body.suspended ? new Date() : null;
+    user.suspensionReason = req.body.suspended ? String(req.body.reason || '').trim().slice(0, 240) : '';
+    if (req.body.suspended) user.refreshTokenHash = undefined;
     await user.save();
-    await audit(req, suspend ? 'account_suspended' : 'account_reactivated', user._id, { targetUsername: user.username, reasonRecorded: Boolean(user.suspensionReason) });
-    res.json({ message: suspend ? 'Account suspended.' : 'Account reactivated.' });
+    await audit(req, req.body.suspended ? 'account_suspended' : 'account_reactivated', user._id, {
+      targetUsername: user.username, reasonRecorded: Boolean(user.suspensionReason),
+    });
+    res.json({ message: req.body.suspended ? 'Account suspended.' : 'Account reactivated.' });
   } catch (error) { next(error); }
 });
 router.get('/admin/audit', currentUser, requireAdmin, async (_req, res, next) => {
@@ -363,9 +315,8 @@ router.post('/admin/users/:id/role', currentUser, requireSuperAdmin, async (req,
     const target = await User.findById(req.params.id);
     if (!target) return res.status(404).json({ message: 'User not found.' });
     if (target.id === req.user.id && role !== 'super_admin') return res.status(409).json({ message: 'You cannot demote your own Super Admin account.' });
-    if (target.role === 'super_admin' && role !== 'super_admin') {
-      const count = await User.countDocuments({ role: 'super_admin' });
-      if (count <= 1) return res.status(409).json({ message: 'The last Super Admin cannot be demoted.' });
+    if (target.role === 'super_admin' && role !== 'super_admin' && await User.countDocuments({ role: 'super_admin' }) <= 1) {
+      return res.status(409).json({ message: 'The last Super Admin cannot be demoted.' });
     }
     target.role = role;
     await target.save();
