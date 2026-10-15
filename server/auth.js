@@ -302,6 +302,13 @@ router.post('/admin/users/:id/suspension', currentUser, requireAdmin, async (req
     res.json({ message: req.body.suspended ? 'Account suspended.' : 'Account reactivated.' });
   } catch (error) { next(error); }
 });
+router.get('/admin/administrators', currentUser, requireSuperAdmin, async (_req, res, next) => {
+  try {
+    const administrators = await User.find({ role: { $in: ['super_admin', 'moderator'] } })
+      .select('username displayName email role createdAt').sort({ role: 1, username: 1 }).lean();
+    res.json({ administrators });
+  } catch (error) { next(error); }
+});
 router.get('/admin/audit', currentUser, requireAdmin, async (_req, res, next) => {
   try {
     const events = await AuditEvent.find().sort({ createdAt: -1 }).limit(100).populate('actorId', 'username displayName').lean();
@@ -326,6 +333,7 @@ router.post('/admin/users/:id/role', currentUser, requireSuperAdmin, async (req,
 });
 
 export async function createInitialAdmin() {
+  await User.updateMany({ role: 'admin' }, { $set: { role: 'super_admin' } });
   const email = process.env.INITIAL_ADMIN_EMAIL?.trim().toLowerCase();
   const username = process.env.INITIAL_ADMIN_USERNAME?.trim().toLowerCase();
   const password = process.env.INITIAL_ADMIN_PASSWORD;
