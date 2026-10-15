@@ -1,45 +1,68 @@
 # ChatWorld React frontend
 
-A responsive React + Vite frontend for the ChatWorld project. The original HTML/CSS pages remain untouched in the repository.
+ChatWorld is being developed in stages. This branch adds the first authentication API and account portal; it is not yet production-ready.
 
-## Run locally
+## Prerequisites
 
-Requirements: Node.js 18+ (Node.js 20 LTS recommended) and npm.
+- Node.js 20 LTS recommended
+- npm
+- MongoDB local instance or MongoDB Atlas database
+- SMTP credentials for email verification and password reset
 
-```bash
+## Configure the backend
+
+In a terminal:
+
+```powershell
+cd server
+npm install
+Copy-Item .env.example .env
+```
+
+Edit `server/.env` and set:
+- `MONGODB_URI`
+- two different strong random secrets for `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET`
+- SMTP settings and `MAIL_FROM`
+- optional `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_USERNAME`, and a unique strong `INITIAL_ADMIN_PASSWORD` (at least 16 characters) for one-time first-admin creation
+
+Never commit `.env` or share its values. If email is not configured, registration will not complete because verification mail is required.
+
+Start the backend:
+
+```powershell
+npm run dev
+```
+
+## Start the frontend
+
+In a second terminal from the repository root:
+
+```powershell
 cd client
 npm install
 npm run dev
 ```
 
-In a second terminal, start the chat server:
+Open the URL printed by Vite (usually `http://localhost:5173`). The default page is the account portal. To open the existing guest lobby, use `http://localhost:5173/?guest=1`.
 
-```bash
-cd server
-npm install
-npm run dev
-```
+## Current authentication features
 
-The client runs on `http://localhost:5173` and the Socket.IO server runs on `http://localhost:3001`. Keep both terminals running. This first stage uses an in-memory public lobby: chat history is temporary and clears when the server restarts. It is not yet connected to MongoDB or account authentication.
-```
+- Registration requests with username, display name, email and a 12+ character password
+- Email verification link endpoint (30-minute expiry)
+- Admin approval required before login; first admin can be bootstrapped from environment configuration
+- Email-or-username login, bcrypt password hashing, short-lived JWT access token and rotating opaque refresh token in an HTTP-only cookie
+- Logout, generic password-reset response and expiring one-time reset links
+- Profile fields (display name, bio and status)
+- Admin pending-account API
+- Helmet, CORS credentials, JSON body limit and API rate limiting
 
-Open the local URL printed by Vite (usually http://localhost:5173).
+## Known gaps — do not treat as production-ready
 
-## Available screens
+- Avatar file validation exists, but persistent avatar storage is not yet configured.
+- Admin review UI does not yet include approve/reject controls; use of the admin API currently requires an API client.
+- Access token is kept in React memory and there is not yet a complete automatic refresh flow.
+- Authenticated accounts are not yet wired into private/group chat; the existing guest lobby remains separate and in-memory.
+- Automated tests, abuse controls, deployment hardening and security review remain necessary.
+- Email delivery, MongoDB connection, initial admin setup and all browser flows have not been tested in this environment.
 
-- Landing page with account and guest entry points
-- Login and registration form layouts with basic client-side validation
-- Chat preview with direct/group filters, conversation search, and local message sending
-- Responsive layout for desktop and mobile
-
-## Important limitations
-
-This is a **frontend-only prototype**. Login and registration do not authenticate users, account details are not submitted to a server, and chat messages exist only in browser memory. Data resets when the page refreshes. Do not enter real passwords or sensitive information.
-
-## Next development steps
-
-1. Connect a Node.js + Express API and MongoDB.
-2. Implement secure registration/login, password hashing, sessions or token handling, and validation on the server.
-3. Add authorization for private and group conversations.
-4. Add Socket.IO for real-time messaging and persistent message storage.
-5. Add tests and deployment configuration.
+The database-backed authentication service requires the configuration above and must be tested locally before use. Do not use real personal data or production passwords during development.
