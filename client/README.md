@@ -53,16 +53,19 @@ Open the URL printed by Vite (usually `http://localhost:5173`). The default page
 - Email-or-username login, bcrypt password hashing, short-lived JWT access token and rotating opaque refresh token in an HTTP-only cookie
 - Logout, generic password-reset response and expiring one-time reset links
 - Profile fields (display name, bio and status)
-- Admin pending-account API
+- Advanced admin dashboard APIs: verified-only approval queue, account search, approval/rejection, suspension/reactivation, audit history, and Super Admin role management
 - Helmet, CORS credentials, JSON body limit and API rate limiting
 
 ## Known gaps — do not treat as production-ready
 
 - Avatar file validation exists, but persistent avatar storage is not yet configured.
-- Admin review UI does not yet include approve/reject controls; use of the admin API currently requires an API client.
+- Registered-user chat is not integrated with account status yet. The guest lobby is still unauthenticated and separate; suspension enforcement for registered sockets must be added when authenticated chat is connected.
 - Access token is kept in React memory and there is not yet a complete automatic refresh flow.
 - Authenticated accounts are not yet wired into private/group chat; the existing guest lobby remains separate and in-memory.
-- Automated tests, abuse controls, deployment hardening and security review remain necessary.
+- Online presence statistics are not yet available for registered accounts; dashboard metrics currently show total, verified, pending-approval and suspended users.
+- Refresh-token replay detection, comprehensive CSRF review, automatic access-token refresh, automated tests, abuse controls, deployment hardening and independent security review remain necessary.
 - Email delivery, MongoDB connection, initial admin setup and all browser flows have not been tested in this environment.
+
+Email verification is required once during registration. Normal sign-in uses email or username plus password; login does not send an OTP. Email is used again for password recovery and generic rejection notification when SMTP is configured.
 
 The database-backed authentication service requires the configuration above and must be tested locally before use. Do not use real personal data or production passwords during development.
